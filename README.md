@@ -10,4 +10,4 @@ Functionality:
 
 
 Compile PiProgramm2.c in terminal with:
-`gcc -o test PiProgramm2.c TSL2561.c  `mysql_config - - flags - -libs`
+gcc -o test PiProgramm2.c TSL2561.c  `mysql_config - - flags - -libs`
