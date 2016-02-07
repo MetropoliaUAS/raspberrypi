@@ -6,7 +6,7 @@ Functionality:
 - Read out Light Sensor TSL2561
 - Read out Environmental Sensor BME280
 - Read out remaining sensor on Atmega
-- Write rad out values in MySQL-Database
+- Write sensor values in MySQL-Database
 
 
 Compile PiProgramm2.c in terminal with:
