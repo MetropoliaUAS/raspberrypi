@@ -29,7 +29,12 @@
 #define HUMIDITY 7
 #define PRESSURE 8
 #define SMOKE 9
-#define BUZZER 10
+#define BUZZER_ON 10
+#define BUZZER_OFF 11
+#define THRESHOLD_TEMP 50
+#define THRESHOLD_HUM 40
+#define THRESHOLD_PRES 1500
+#define THRESHOLD_LUX 600
 
 
 
@@ -90,7 +95,7 @@ void finish_with_error(MYSQL *con)
 {
   fprintf(stderr, "%s\n", mysql_error(con));
   mysql_close(con);
-  exit(1);
+  main(); //go to main and try to reconnect
 }
 
 
@@ -104,7 +109,7 @@ int main(void)
 	int adc_H,dig_H1,dig_H2,dig_H3,dig_H4,dig_H5,dig_H6;
 	int adc_P,dig_P1,dig_P2,dig_P3,dig_P4,dig_P5,dig_P6,dig_P7,dig_P8,dig_P9;
 	//float temperature,humidity,pressure;
-	int temperature,humidity,pressure,co2,co,volume,light,accleration,smoke,buzzer;
+	int temperature=0,humidity=0,pressure=0,co2=0,co=0,volume=0,light=0,accleration=0,smoke=0,buzzer=0;
 	char query[100];
 	int SensorId;
 	char buf[BUFFER_SIZE];
@@ -113,6 +118,8 @@ int main(void)
 	uint16_t broadband, ir;
 	uint32_t lux=0;
 
+
+	sleep(60);// wait for pi to boot
 	// Init connection to DB
 	MYSQL *con = mysql_init(NULL);
     	if (con == NULL)
@@ -127,16 +134,17 @@ int main(void)
       		finish_with_error(con);
   	}
 
-	// BME280
+    while(1){
+	// connect via I2C with BME280
 	if((file=open(devName,O_RDWR))<0)	// open i2c-bus
 	{
 		perror("cannot open i2c-1");
-		exit(1);
+		//exit(1);
 	}
 	if(ioctl(file, I2C_SLAVE, ADDRESS_BME)<0)	// open slave
 	{
 		perror("cannot open slave address");
-		exit(1);
+		//exit(1);
 	}
 	i2c_smbus_write_byte_data(file,0xf2,0x01);	// activate humidity measurement
 	i2c_smbus_write_byte_data(file,0xf4,0x27);	// activate temperature measurement
@@ -200,16 +208,54 @@ int main(void)
 
 	close(file);
 
+    // connect via I2C with light sensor
+    // Light Sensor
+	// prepare the sensor
+	// (the first parameter is the raspberry pi i2c master controller attached to the TSL2561, the second is the i2c selection jumper)
+	// The i2c selection address can be one of: TSL2561_ADDR_LOW, TSL2561_ADDR_FLOAT or TSL2561_ADDR_HIGH
+	TSL2561 light1 = TSL2561_INIT(1, ADDRESS_TSM);
+
+	// initialize the sensor
+	rc = TSL2561_OPEN(&light1);
+	if(rc != 0) {
+		fprintf(stderr, "Error initializing TSL2561 sensor (%s). Check your i2c bus (es. i2cdetect)\n", strerror(light1.lasterr));
+		// you don't need to TSL2561_CLOSE() if TSL2561_OPEN() failed, but it's safe doing it.
+		TSL2561_CLOSE(&light1);
+		//return 1;
+	}
+
+	// set the gain to 1X (it can be TSL2561_GAIN_1X or TSL2561_GAIN_16X)
+	// use 16X gain to get more precision in dark ambients, or enable auto gain below
+	rc = TSL2561_SETGAIN(&light1, TSL2561_GAIN_1X);
+
+	// set the integration time
+	// (TSL2561_INTEGRATIONTIME_402MS or TSL2561_INTEGRATIONTIME_101MS or TSL2561_INTEGRATIONTIME_13MS)
+	// TSL2561_INTEGRATIONTIME_402MS is slower but more precise, TSL2561_INTEGRATIONTIME_13MS is very fast but not so precise
+	rc = TSL2561_SETINTEGRATIONTIME(&light1, TSL2561_INTEGRATIONTIME_101MS);
+
+	// sense the luminosity from the sensor (lux is the luminosity taken in "lux" measure units)
+	// the last parameter can be 1 to enable library auto gain, or 0 to disable it
+	rc = TSL2561_SENSELIGHT(&light1, &broadband, &ir, &lux, 1);
+	printf("lux: %i\n", lux);
+	light = (int) lux;
+	sprintf(query, "INSERT INTO samplings (sensor_id, sampled, created_at) VALUES(%i,%i,CURRENT_TIMESTAMP)",LIGHT,light);
+	if (mysql_query(con, query))
+        {finish_with_error(con);}
+
+	TSL2561_CLOSE(&light1);
+
+
+
 	//Acquire bus ATMEGA
 	if((file=open(devName,O_RDWR))<0)	// open i2c-bus
 	{
 		perror("cannot open i2c-1");
-		exit(1);
+		//exit(1);
 	}
 	if(ioctl(file, I2C_SLAVE, ADDRESS_ATMEGA)<0)	// open slave
 	{
 		perror("cannot open slave address");
-		exit(1);
+		//exit(1);
 	}
 
 
@@ -265,6 +311,24 @@ int main(void)
 		}
 
 
+        cmd[0] = ACCLERATION; // Readout accleration
+		if (write(file, cmd, 1) == 1)
+		{
+			usleep(10000);	// wait for answer
+
+			if ( read(file, buf, BUFFER_SIZE) == BUFFER_SIZE)
+			{
+
+			accleration = buf[1] | buf[0] << 8;
+			printf("%i: %i\n", ACCLERATION,accleration);
+			sprintf(query, "INSERT INTO samplings (sensor_id, sampled, created_at) VALUES(%i,%i,CURRENT_TIMESTAMP)",ACCLERATION,accleration);
+				if (mysql_query(con, query)) {
+      				finish_with_error(con);
+  				}
+			}
+		}
+
+
 		cmd[0] = SMOKE; // Readout smoke value
 		if (write(file, cmd, 1) == 1)
 		{
@@ -282,45 +346,39 @@ int main(void)
 			}
 		}
 
+        // THRESHOLD values to activate buzzer
+        if (temperature>THRESHOLD_TEMP || humidity>THRESHOLD_HUM|| pressure>THRESHOLD_PRES)
+        {
+            cmd[0] = BUZZER_ON;
+            buzzer=1;
+        }
+        else
+        {
+            cmd[0] = BUZZER_OFF;
+            buzzer=0;
+        }
+         // Readout smoke value
+		if (write(file, cmd, 1) == 1)
+		{
+
+            printf("%i: %i\n", BUZZER_ON, buzzer);
+			sprintf(query, "INSERT INTO samplings (sensor_id, sampled, created_at) VALUES(%i,%i,CURRENT_TIMESTAMP)",BUZZER_ON,buzzer);
+				if (mysql_query(con, query)) {
+      				finish_with_error(con);
+  				}
+			}
+
 
 	close(file);
 
-	// Light Sensor
-	// prepare the sensor
-	// (the first parameter is the raspberry pi i2c master controller attached to the TSL2561, the second is the i2c selection jumper)
-	// The i2c selection address can be one of: TSL2561_ADDR_LOW, TSL2561_ADDR_FLOAT or TSL2561_ADDR_HIGH
-	TSL2561 light1 = TSL2561_INIT(1, ADDRESS_TSM);
 
-	// initialize the sensor
-	rc = TSL2561_OPEN(&light1);
-	if(rc != 0) {
-		fprintf(stderr, "Error initializing TSL2561 sensor (%s). Check your i2c bus (es. i2cdetect)\n", strerror(light1.lasterr));
-		// you don't need to TSL2561_CLOSE() if TSL2561_OPEN() failed, but it's safe doing it.
-		TSL2561_CLOSE(&light1);
-		return 1;
-	}
 
-	// set the gain to 1X (it can be TSL2561_GAIN_1X or TSL2561_GAIN_16X)
-	// use 16X gain to get more precision in dark ambients, or enable auto gain below
-	rc = TSL2561_SETGAIN(&light1, TSL2561_GAIN_1X);
 
-	// set the integration time
-	// (TSL2561_INTEGRATIONTIME_402MS or TSL2561_INTEGRATIONTIME_101MS or TSL2561_INTEGRATIONTIME_13MS)
-	// TSL2561_INTEGRATIONTIME_402MS is slower but more precise, TSL2561_INTEGRATIONTIME_13MS is very fast but not so precise
-	rc = TSL2561_SETINTEGRATIONTIME(&light1, TSL2561_INTEGRATIONTIME_101MS);
-
-	// sense the luminosity from the sensor (lux is the luminosity taken in "lux" measure units)
-	// the last parameter can be 1 to enable library auto gain, or 0 to disable it
-	rc = TSL2561_SENSELIGHT(&light1, &broadband, &ir, &lux, 1);
-	printf("lux: %i\n", lux);
-	light = (int) lux;
-	sprintf(query, "INSERT INTO samplings (sensor_id, sampled, created_at) VALUES(%i,%i,CURRENT_TIMESTAMP)",LIGHT,light);
-	if (mysql_query(con, query))
-        {finish_with_error(con);}
-
-	TSL2561_CLOSE(&light1);
+    sleep(60);
+    }
 
 	mysql_close(con);
 
 	return 0;
+
 }
