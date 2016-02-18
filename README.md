@@ -19,3 +19,4 @@ Compile PiProgramm2.c in terminal and save executable file under the name ISDP:
 1. in Terminal type: ```sudo nano /etc/rc.local```
 2. add after comments: ```/home/pi/IDSP  # run ISDP```
 3. save file with: STRG+O, then press Return, then press STRG+X to exit file
+4. in Terminal type: ```reboot```programm will autostart now
