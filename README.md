@@ -13,7 +13,7 @@
 ### Compilation in Terminal
 Compile PiProgramm2.c in terminal and save executable file under the name ISDP:
 
-```gcc -o ISDP PiProgramm2.c TSL2561.c  `mysql_config - - cflags - -libs````
+```gcc -o ISDP PiProgramm2.c TSL2561.c  `mysql_config -- cflags --libs````
 
 ### Setup Autostart for ISDP Programm with rc.local
 1. in Terminal type: ```sudo nano /etc/rc.local```
